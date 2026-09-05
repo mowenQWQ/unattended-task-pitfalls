@@ -1,8 +1,8 @@
 # unattended-task-pitfalls
 
-**无人值守自动任务加固经验库——"操作纪律会失效，只有代码能兜底"。来自两次备份损坏事故 + cron 总结误判事故的完整复盘。**
+**无人值守自动任务加固经验库——"操作纪律会失效，只有代码能兜底"。来自两次备份损坏事故 + 一次 504 杀进程事故 + cron 总结误判事故的完整复盘。**
 
-**A hardening playbook for AI-agent unattended/scheduled tasks — "operational discipline fails unattended; only code has your back." Distilled from two real backup-corruption incidents and a cron summarization misjudgment.**
+**A hardening playbook for AI-agent unattended/scheduled tasks — "operational discipline fails unattended; only code has your back." Distilled from two backup-corruption incidents, a 504 process-kill incident, and a cron summarization misjudgment.**
 
 [中文](#中文) | [English](#english)
 
@@ -12,11 +12,12 @@
 
 ### 这是什么
 
-一个 AI agent 工作区的真实事故复盘（2026-08）：
+一个 AI agent 工作区的真实事故复盘（2026-08 ~ 09）：
 
 - **08-27**：定时备份产出损坏文件并上传云端，教训"gzip -t 验证后才能上传"被记入长期记忆
 - **08-30**：同款事故**复发**——因为 cron 会话根本读不到"操作纪律"，纪律只对在线的 agent 有效。528MB 截断坏文件再次上传（正常 911MB）
 - **08-24/25**：cron 总结任务在隔离会话里误判"全天无对话"（它看不到主会话上下文）
+- **09-05**：cron 提示词里的**裸命令**被执行会话照抄前台运行，第三次被网关杀进程——但这次恢复侧零失误（先查进程再重跑，锁自动释放，验证闸门自动拦截残缺包）。新教训：**prompt 既是纪律载体，也是风险载体**
 
 由此提炼出本库的核心命题：**无人值守链路里，操作纪律会失效，只有代码能兜底。**
 
@@ -25,7 +26,7 @@
 | 章节 | 解决什么 |
 |------|---------|
 | §1 核心哲学 | 为什么"记忆型教训"在无人值守场景必然失效，教训落点分级（脚本内 > prompt > 记忆） |
-| §2 后台执行 | 前台跑被网关杀、"504 ≠ 命令未执行"（盲目重试 = 并发实例互踩）、锁与幂等 |
+| §2 后台执行 | 前台跑被网关杀、"504 ≠ 命令未执行"（盲目重试 = 并发实例互踩）、锁与幂等、**prompt 内嵌命令的安全形态** |
 | §3 验证链 | 产物完整性验证（`gzip -t`）、"验证不过绝不上传"闸门、"已存在跳过"复用坏文件坑 |
 | §4 隔离会话 | cron 会话的上下文盲区、"无对话/静默"结论的证据法（含会话初始化产物的排除清单） |
 | §5 通知设计 | cron 无条件通知 vs 心跳条件通知、自动任务输出禁用拟人内容、静默档防通知疲劳 |
@@ -34,9 +35,10 @@
 ### 核心原则速览
 
 1. 凡无人值守的纪律，**一次性落到代码与 prompt**（锁、验证闸门、复查脚本），不要指望 agent"想起来"
-2. 单一任务的自我报告不可信——给关键产物配**独立验证路径**
-3. 网关/管道类超时 ≠ 命令未执行，**先查进程再决定重试**
-4. 失败的默认出口 = 记录日志 + 通知用户 + 保留现场，不在失败路径上做主观决策
+2. **prompt 里内嵌的长命令要直接写成安全形态**（`setsid nohup ... &` 全格式），不指望执行者"记得加壳"
+3. 单一任务的自我报告不可信——给关键产物配**独立验证路径**
+4. 网关/管道类超时 ≠ 命令未执行，**先查进程再决定重试**
+5. 失败的默认出口 = 记录日志 + 通知用户 + 保留现场，不在失败路径上做主观决策
 
 ### 适合谁
 
@@ -69,11 +71,12 @@ cp -r unattended-task-pitfalls /path/to/your/agent/skills/
 
 ### What is this
 
-A post-mortem from a real AI-agent workspace (August 2026):
+A post-mortem from a real AI-agent workspace (Aug–Sep 2026):
 
 - **08-27**: a scheduled backup uploaded a corrupted archive; the lesson ("verify with `gzip -t` before upload") was stored in long-term memory
 - **08-30**: the **same incident recurred** — because cron sessions never read "operational discipline"; discipline only binds an online agent. Another truncated 528MB file (expected: 911MB) went upstream
 - **08-24/25**: a cron summarization task in an isolated session misjudged "no conversations today" (it cannot see the main session's context)
+- **09-05**: a **bare command** embedded in the cron prompt was copy-pasted and run in the foreground; the gateway killed the process for the third time — but recovery was flawless this time (check process → rerun in background; lock auto-released; verification gate auto-rejected the truncated artifact). New lesson: **a prompt is both a discipline carrier and a risk carrier**
 
 The core thesis: **in unattended pipelines, operational discipline fails — only code has your back.**
 
@@ -82,7 +85,7 @@ The core thesis: **in unattended pipelines, operational discipline fails — onl
 | Section | Covers |
 |---------|--------|
 | §1 Core philosophy | Why "memory-stored lessons" inevitably fail unattended; lesson-placement tiers (in-script > prompt > memory) |
-| §2 Background execution | Gateway-killed foreground runs, "504 ≠ not executed" (blind retries = concurrent instances racing), locks & idempotency |
+| §2 Background execution | Gateway-killed foreground runs, "504 ≠ not executed" (blind retries = concurrent instances racing), locks & idempotency, **safe form for commands embedded in prompts** |
 | §3 Verification chain | Artifact integrity (`gzip -t`), "never upload without verification" gates, the "skip if exists" reuse-of-corrupt-file trap |
 | §4 Isolated sessions | Cron context blindness; evidence-based "no activity" conclusions (with init-artifact exclusion list) |
 | §5 Notification design | Unconditional cron vs conditional heartbeat notifications; no anthropomorphic filler in automated output; silence tiers |
@@ -91,9 +94,10 @@ The core thesis: **in unattended pipelines, operational discipline fails — onl
 ### Quick principles
 
 1. Move every unattended discipline **into code and prompts once** (locks, verification gates, review scripts) — don't count on the agent "remembering"
-2. Never trust a task's self-report — give critical artifacts an **independent verification path**
-3. Gateway/pipeline timeouts ≠ command not executed — **check the process before retrying**
-4. Default failure exit = log + notify + preserve the scene; make no subjective decisions on the failure path
+2. **Embed long commands in prompts in their safe form** (`setsid nohup ... &` full format) — don't count on the executor "remembering to wrap it"
+3. Never trust a task's self-report — give critical artifacts an **independent verification path**
+4. Gateway/pipeline timeouts ≠ command not executed — **check the process before retrying**
+5. Default failure exit = log + notify + preserve the scene; make no subjective decisions on the failure path
 
 ### Installation
 
